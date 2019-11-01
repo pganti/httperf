@@ -1,0 +1,44 @@
+DUMMYNET=root@@dummynet.lan
+CLIENT=client.lan
+CLIENT2=client2.lan
+# other traffic on .lab
+WEB=web.lab
+WEB2=web2.lab
+delay=16
+size=1024
+
+### This one is special: "https $WEB.$PROXY 11443"
+### Different ciphers could be used on each of the two endpoints.
+for base in "$WEB 443" "$PROXY 12443" "$WEB.$PROXY 11443"
+do
+	read server port <<-EOF
+		$base
+	EOF
+
+	OPTS="$HTTPS_OPTS --server $server --port $port"
+
+	for delay in 0 16
+	do
+		echo "RTT is $((2*delay))"
+		echo # blank line
+
+		# configure dummynet
+		ssh -T $DUMMYNET <<-EOF
+			ipfw pipe 3060 config delay $delay
+			ipfw pipe 6030 config delay $delay
+		EOF
+
+		oifs=$IFS
+		IFS=:
+		#for cipher in $($OPENSSL ciphers -ssl3 "ALL:-DH")
+		for cipher in $($OPENSSL ciphers -ssl3 "ALL:-DSS")
+		do
+			echo "cipher is $cipher"
+			ssh -T $CLIENT "httperf $OPTS --ssl-ciphers $cipher --uri /cipher/$cipher/$size"
+			echo # blank line
+		done
+		IFS=$oifs
+	done > data/ciphers-$server.log
+	awk -f filter.awk data/ciphers-$server.log \
+		> data/ciphers-$server.points
+done
